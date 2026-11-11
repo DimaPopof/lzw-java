@@ -57,10 +57,19 @@ public class LZW {
                 if (currentRatio >= bestRatio) {
                     bestRatio = currentRatio;
                 } else {
+                    out.writeShort(prefix);
+                    outputCodes++;
                     out.writeShort(CLEAR_CODE);
                     outputCodes++;
                     resetDict.run();
                     bestRatio = 0.0;
+
+                    int next = in.read();
+                    if (next == -1) {
+                        return;
+                    }
+                    prefix = next;
+                    bytesIn++;
                 }
             }
         }
@@ -149,16 +158,6 @@ public class LZW {
     }
 
     public static void main(String[] args) throws IOException {
-        if (args.length == 0) {
-            String testString = "ababcbababa"; 
-            runSelfTest(testString.getBytes());
-            testString = "TOBEORNOTTOBEORTOBEORNOT"; 
-            runSelfTest(testString.getBytes());
-            testString = "hello"; 
-            runSelfTest(testString.getBytes());
-            return;
-        }
-
         if (args.length >= 2) {
             String mode = args[0];
             String inputFilename = args[1];
@@ -204,115 +203,6 @@ public class LZW {
         System.err.println("Usage: java LZW [-c | -d] <filename>");
         System.err.println("  -c : Compress file to <filename>.my_lzw");
         System.err.println("  -d : Decompress <filename>.my_lzw");
-    }
-
-    private static void runSelfTest(byte[] data) {
-        System.out.println("Running LZW Java Self-Test...");
-        System.out.println("Original size: " + data.length + " bytes");
-
-        System.out.println("\n--- COMPRESSION TABLE ---");
-        System.out.printf("%-4s | %-15s | %-10s | %-11s | %-20s%n", "Step", "Current Prefix", "Next Char", "Output Code", "New Dict Entry");
-        System.out.println("-".repeat(72));
-        
-        List<Integer> output = new ArrayList<>();
-        Map<Pattern, Integer> dict = new HashMap<>();
-        int dictSize = 257; 
-        
-        Map<Integer, String> traceDict = new HashMap<>();
-        for (int i = 0; i < 256; i++) traceDict.put(i, "" + (char) i);
-        
-        int compStep = 1;
-        System.out.printf("%-4d | %-15s | %-10s | %-11d | %-20s%n", compStep++, "", "", CLEAR_CODE, "(Clear Code)");
-        output.add(CLEAR_CODE);
-        int prefix = data[0] & 0xFF;
-
-        for (int i = 1; i < data.length; ++i) {
-            byte current_byte = data[i];
-            Pattern pattern = new Pattern(prefix, current_byte);
-
-            if (dict.containsKey(pattern)) {
-                System.out.printf("%-4d | %-15s | %-10s | %-11s | %-20s%n", compStep++, traceDict.get(prefix), (char) current_byte, "", "");
-                prefix = dict.get(pattern);
-            } else {
-                output.add(prefix);
-                String newEntry = traceDict.get(prefix) + (char) current_byte;
-                if (dictSize < MAX_DICT_SIZE) {
-                    traceDict.put(dictSize, newEntry);
-                    dict.put(pattern, dictSize++);
-                }
-                System.out.printf("%-4d | %-15s | %-10s | %-11d | %s%n", compStep++, traceDict.get(prefix), (char) current_byte, prefix,
-                        dictSize <= MAX_DICT_SIZE ? (dictSize - 1) + " : " + newEntry : "");
-                prefix = current_byte & 0xFF;
-            }
-        }
-        output.add(prefix);
-        System.out.printf("%-4d | %-15s | %-10s | %-11d | %-20s%n", compStep++, traceDict.get(prefix), "EOF", prefix, "");
-        
-        List<Integer> compressed = output;
-        System.out.println("Origional string: " + new String(data));
-        System.out.println("Compressed codes: " + compressed);
-        System.out.println("\nCompressed size: " + (compressed.size() * 2) + " bytes");
-
-
-        System.out.println("\n--- DECOMPRESSION TABLE ---");
-        System.out.printf("%-4s | %-11s | %-25s | %-15s | %-20s%n", "Step", "Input Code", "Reconstructed Pattern", "Output", "New Dict Entry");
-        System.out.println("-".repeat(87));
-
-        ByteArrayOutputStream outResult = new ByteArrayOutputStream();
-        Map<Integer, byte[]> decDict = new HashMap<>();
-        int decDictSize = 257;
-        for (int i = 0; i < 256; ++i) decDict.put(i, new byte[]{(byte) i});
-        
-        int oldCode = -1;
-        int decStep = 1;
-
-        for (int newCode : compressed) {
-            if (newCode == CLEAR_CODE) {
-                System.out.printf("%-4d | %-11d | %-25s | %-15s | %-20s%n", decStep++, newCode, "(Clear Code)", "", "(Reset Dict)");
-                oldCode = -1;
-                continue;
-            }
-
-            if (oldCode == -1) {
-                System.out.printf("%-4d | %-11d | %-25s | %-15s | %-20s%n", decStep++, newCode, new String(new byte[]{(byte) newCode}), new String(new byte[]{(byte) newCode}), "");
-                outResult.write((byte) newCode);
-                oldCode = newCode;
-                continue;
-            }
-
-            byte[] oldString = decDict.get(oldCode);
-            byte[] currentString;
-            if (decDict.containsKey(newCode)) {
-                currentString = decDict.get(newCode);
-            } else if (newCode >= decDictSize) {
-                currentString = Arrays.copyOf(oldString, oldString.length + 1);
-                currentString[oldString.length] = oldString[0];
-            } else {
-                throw new RuntimeException("Invalid LZW code sequence.");
-            }
-
-            try { outResult.write(currentString); } catch (IOException ignored) {}
-
-            String newDictEntryStr = "";
-            int newDictCode = decDictSize;
-            if (decDictSize < MAX_DICT_SIZE) {
-                byte[] newPattern = Arrays.copyOf(oldString, oldString.length + 1);
-                newPattern[oldString.length] = currentString[0];
-                newDictEntryStr = new String(newPattern);
-                decDict.put(decDictSize++, newPattern);
-            }
-            System.out.printf("%-4d | %-11d | %-25s | %-15s | %d : %s%n", decStep++, newCode, new String(currentString), new String(currentString), newDictCode, newDictEntryStr);
-            oldCode = newCode;
-        }
-        
-        byte[] decompressed = outResult.toByteArray();
-        System.out.println("Decompressed string: " + new String(decompressed));
-        System.out.println("\nDecompressed size: " + decompressed.length + " bytes");
-
-        if (Arrays.equals(data, decompressed)) {
-            System.out.println("SUCCESS! Decompressed data perfectly matches original.");
-        } else {
-            System.out.println("FAILED! Data mismatch.");
-        }
+        System.exit(1);
     }
 }
